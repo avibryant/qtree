@@ -1,0 +1,18 @@
+message QTree {
+  message Stats {
+    required double count = 1;
+    required double mean = 2;
+  }
+  required int64 offset = 1;
+  required int32 level = 2;
+  required Stats stats = 3;
+  optional QTree lowerChild = 4;
+  optional QTree upperChild = 5;
+}
+
+
+message DecayedQTree {
+  required int32 halfLife = 1;
+  required int64 scaledTime = 2;
+  required QTree tree = 3;
+}
