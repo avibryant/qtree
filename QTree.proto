@@ -7,9 +7,7 @@ message QTree {
   optional QTree upperChild = 6;
 }
 
-
 message DecayedQTree {
-  required int32 halfLife = 1;
+  required QTree tree = 1;
   required int64 scaledTime = 2;
-  required QTree tree = 3;
 }

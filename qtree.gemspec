@@ -6,6 +6,6 @@ Gem::Specification.new do |s|
   s.description = "Approximate quantiles"
   s.authors     = ["Avi Bryant"]
   s.email       = "avi@avibryant.com"
-  s.files       = ["lib/qtree.rb", "lib/qtree/qtree.rb"]
+  s.files       = ["lib/qtree.rb", "lib/qtree/qtree.rb", "lib/qtree/decay.rb"]
   s.homepage    = "http://github.com/avibryant/qtree"
 end

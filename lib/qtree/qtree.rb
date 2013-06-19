@@ -10,14 +10,18 @@ class QTree
     def self.required(attr, type, num)
       attr_accessor(attr)
     end
+
+    def self.optional(attr, type, name)
+      attr_accessor(attr)
+    end
   end
 
   required :offset, :int64, 1
   required :level, :int32, 2
   required :count, :double, 3
   required :mean, :double, 4
-  required :lowerchild, self, 5
-  required :upperchild, self, 6
+  optional :lowerchild, self, 5
+  optional :upperchild, self, 6
 
   def self.create(value, level = nil)
     if(value < 0)
@@ -62,7 +66,7 @@ class QTree
 
   def quantile(p)
     rank = count * p
-    [find_rank_lower_bound(rank), find_rank_upper_bound(rank)]
+    Range.new(find_rank_lower_bound(rank), find_rank_upper_bound(rank))
   end
 
   protected
