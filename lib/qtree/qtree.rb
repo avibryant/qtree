@@ -52,12 +52,12 @@ class QTree
     1 + lower_size + upper_size
   end
 
-  def merge(other, k = 48)
-    min_count = (count + other.count) * 3 / k
+  def merge(other, k = 48, scale = 1.0)
+    min_count = (count + (other.count * scale)) * 3 / k
     common = common_ancestor_level(other)
     left = extend_to_level(common)
     right = other.extend_to_level(common)
-    left.merge_with_peer(right, min_count)
+    left.merge_with_peer(right, min_count, scale)
   end
 
   def quantile(p)
@@ -103,27 +103,44 @@ class QTree
     [ancestor_level, level, other.level].max
   end
 
-  def merge_with_peer(other, min_count)
+  def merge_with_peer(other, min_count, scale)
     return self unless other
     inst = self.class.new
     inst.level = level
     inst.offset = offset
-    inst.count = count + other.count
-    inst.mean = merge_means(other)
-    if(inst.count >= min_count)
-      if lowerchild
-        inst.lowerchild = lowerchild.merge_with_peer(other.lowerchild, min_count)
-      else
-        inst.lowerchild = other.lowerchild
-      end
 
-      if upperchild
-        inst.upperchild = upperchild.merge_with_peer(other.upperchild, min_count)
+    scaled_count = other.count * scale
+    inst.count = count + scaled_count
+    inst.mean = merge_means(scaled_count, other.mean)
+    if(inst.count >= min_count)
+      inst.lowerchild = merge_children(lowerchild, other.lowerchild, min_count, scale)
+      inst.upperchild = merge_children(upperchild, other.upperchild, min_count, scale)
+    end
+    inst
+  end
+
+  def merge_children(mine, other, min_count, scale)
+    if mine
+      mine.merge_with_peer(other, min_count, scale)
+    elsif other
+      if scale == 1.0
+        other
       else
-        inst.upperchild = other.upperchild
+        other.prune_and_scale(min_count, scale)
       end
     end
+  end
 
+  def prune_and_scale(min_count, scale)
+    inst = self.class.new
+    inst.level = level
+    inst.offset = offset
+    inst.count = count * scale
+    inst.mean = mean
+    if(inst.count >= min_count)
+      inst.lowerchild = lowerchild && lowerchild.prune_and_scale(min_count, scale)
+      inst.upperchild = upperchild && upperchild.prune_and_scale(min_count, scale)
+    end
     inst
   end
 
@@ -164,23 +181,21 @@ class QTree
     end
   end
 
-  def merge_means(other)
-    if(other.count > count)
-      other.merge_means(self)
-    elsif(other.count == 0)
-      mean
+  def merge_means(c2, m2)
+    c1 = count
+    m1 = mean
+
+    if(c1 < c2)
+      c1,c2 = c2,c1
+      m1,m2 = m2,m1
+    end
+
+    new_count = c1 + c2
+    weight = c2 / new_count
+    if(weight < 0.1)
+      m1 + (m2 - m1)*weight
     else
-      new_count = count + other.count
-      if(new_count <= 0)
-        0
-      else
-        other_weight = other.count / new_count
-        if(other_weight < 0.1)
-          mean + (other.mean - mean)*other_weight
-        else
-          (count*mean + other.count*other.mean) / new_count
-        end
-      end
+      (c1*m1 + c2*m2) / new_count
     end
   end
 end
