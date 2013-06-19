@@ -1,13 +1,10 @@
 message QTree {
-  message Stats {
-    required double count = 1;
-    required double mean = 2;
-  }
   required int64 offset = 1;
   required int32 level = 2;
-  required Stats stats = 3;
-  optional QTree lowerChild = 4;
-  optional QTree upperChild = 5;
+  required double count = 3;
+  required double mean = 4;
+  optional QTree lowerChild = 5;
+  optional QTree upperChild = 6;
 }
 
 

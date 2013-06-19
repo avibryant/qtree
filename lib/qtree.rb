@@ -1,18 +1,37 @@
-require 'protobuf'
-require 'QTree.pb'
-
 class QTree
+  #use the beefcake protobuf library if available
+  begin
+    require 'beefcake'
+    include Beefcake::Message
+
+    def initialize
+      #the default beefcake implementation of this is very slow
+    end
+  rescue LoadError
+    def self.required(attr, type, num)
+      attr_accessor(attr)
+    end
+  end
+
+  required :offset, :int64, 1
+  required :level, :int32, 2
+  required :count, :double, 3
+  required :mean, :double, 4
+  required :lowerchild, self, 5
+  required :upperchild, self, 6
+
   def self.create(value, level = nil)
     if(value < 0)
       raise "QTree cannot accept negative values"
     end
 
-    level ||= Fixnum === value ? 0 : -16
+    level ||= Fixnum === value ? 0 : -12
 
     inst = self.new
     inst.offset = (value.to_f / (2.0 ** level)).floor
     inst.level = level
-    inst.stats = Stats.new(:count => 1.0, :mean => value)
+    inst.count = 1.0
+    inst.mean = value
     inst
   end
 
@@ -28,40 +47,23 @@ class QTree
     width * (offset + 1)
   end
 
-  def count
-    stats.count
+  def size
+    lower_size = lowerchild ? lowerchild.size : 0
+    upper_size = upperchild ? upperchild.size : 0
+    1 + lower_size + upper_size
   end
 
-  def mean
-    stats.mean
-  end
-
-  def +(other)
+  def merge(other, k = 48)
+    min_count = (count + other.count) * 3 / k
     common = common_ancestor_level(other)
     left = extend_to_level(common)
     right = other.extend_to_level(common)
-    left.merge(right)
-  end
-
-  def compress(size_hint = 6)
-    min_count = count / (2 ** size_hint)
-    new_tree, pruned = prune_children_where{|c| c.count < min_count}
-    new_tree
+    left.merge_with_peer(right, min_count)
   end
 
   def quantile(p)
     rank = count * p
     [find_rank_lower_bound(rank), find_rank_upper_bound(rank)]
-  end
-
-  def range(from, to)
-    if(from <= lower_bound && to >= upper_bound)
-      [stats, stats]
-    elsif(from < upper_bound && to >= lower_bound)
-      partial_range(from,to)
-    else
-      empty_range
-    end
   end
 
   protected
@@ -76,7 +78,8 @@ class QTree
       parent = self.class.new
       parent.level = level + 1
       parent.offset = offset / 2
-      parent.stats = stats.dup
+      parent.count = count
+      parent.mean = mean
 
       if(offset % 2 == 0)
         parent.lowerchild = self
@@ -101,29 +104,36 @@ class QTree
     [ancestor_level, level, other.level].max
   end
 
-  def merge(other)
+  def merge_with_peer(other, min_count)
+    return self unless other
     inst = self.class.new
     inst.level = level
     inst.offset = offset
-    inst.stats = stats + other.stats
-    inst.lowerchild = merge_children(lowerchild, other.lowerchild)
-    inst.upperchild = merge_children(upperchild, other.upperchild)
-    inst
-  end
+    inst.count = count + other.count
+    inst.mean = merge_means(other)
+    if(inst.count >= min_count)
+      if lowerchild
+        inst.lowerchild = lowerchild.merge_with_peer(other.lowerchild, min_count)
+      else
+        inst.lowerchild = other.lowerchild
+      end
 
-  def merge_children(left, right)
-    if left && right
-      left.merge(right)
-    else
-      left || right
+      if upperchild
+        inst.upperchild = upperchild.merge_with_peer(other.upperchild, min_count)
+      else
+        inst.upperchild = other.upperchild
+      end
     end
+
+    inst
   end
 
   def find_rank_lower_bound(rank)
     if(rank > count)
       nil
     else
-      lower_count, upper_count = map_children_with_default(0.0){|c| c.count}
+      lower_count = lowerchild ? lowerchild.count : 0.0
+      upper_count = upperchild ? upperchild.count : 0.0
       parent_count = count - lower_count - upper_count
 
       result = lowerchild && lowerchild.find_rank_lower_bound(rank - parent_count)
@@ -155,97 +165,22 @@ class QTree
     end
   end
 
-  def map_children_with_default(default)
-    [(lowerchild && yield(lowerchild)) || default,
-      (upperchild && yield(upperchild)) || default]
-  end
-
-  def prune_children_where(&b)
-    if b.call(self)
-      inst = self.class.new
-      inst.level = level
-      inst.offset = offset
-      inst.stats = stats.dup
-      inst.lowerchild = nil
-      inst.upperchild = nil
-      [inst, true]
+  def merge_means(other)
+    if(other.count > count)
+      other.merge_means(self)
+    elsif(other.count == 0)
+      mean
     else
-      new_lower, lower_pruned = prune_child_where(lowerchild, &b)
-      new_upper, upper_pruned = prune_child_where(upperchild, &b)
-      if(!lower_pruned && !upper_pruned)
-        [self, false]
+      new_count = count + other.count
+      if(new_count <= 0)
+        0
       else
-        inst = self.class.new
-        inst.level = level
-        inst.offset = offset
-        inst.stats = stats.dup
-        inst.lowerchild = new_lower
-        inst.upperchild = new_upper
-        [inst, true]
-      end
-    end
-  end
-
-  def prune_child_where(child, &b)
-    if child
-      child.prune_children_where(&b)
-    else
-      [nil, false]
-    end
-  end
-
-  def empty_range
-    [Stats.empty, Stats.empty]
-  end
-
-  def partial_range(from, to)
-    a, b = map_children_with_default(empty_range){|c| c.range(from, to)}
-    low = a[0] + b[0]
-    high = a[1] + b[1] + stats_without_children
-    [low,high]
-  end
-
-  def stats_without_children
-    result = stats
-    result -= lowerchild.stats if lowerchild
-    result -= upperchild.stats if upperchild
-    result
-  end
-
-  class Stats
-    def self.empty
-      self.new(:count => 0.0, :mean => 0.0)
-    end
-
-    def <=>(other)
-      count <=> other.count
-    end
-
-    def -(other)
-      neg = other.dup
-      neg.count *= -1
-      self + neg
-    end
-
-    def +(other)
-      if(other.count > count)
-        other + self
-      elsif(other.count == 0)
-        self
-      else
-        inst = self.class.new
-        inst.count = count + other.count
-        if(inst.count <= 0)
-          inst.mean = 0
+        other_weight = other.count / new_count
+        if(other_weight < 0.1)
+          mean + (other.mean - mean)*other_weight
         else
-          other_weight = other.count / inst.count
-          if(other_weight < 0.1)
-            inst.mean = mean + (other.mean - mean)*other_weight
-          else
-            inst.mean = (count*mean + other.count*other.mean) / inst.count
-          end
+          (count*mean + other.count*other.mean) / new_count
         end
-        inst
       end
     end
   end
